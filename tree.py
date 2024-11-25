@@ -1,34 +1,33 @@
+from flask import Flask, jsonify, request
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.metrics import mean_squared_error
-from flask import Flask, jsonify, request
-from math import sqrt
 
-# Flask app
 app = Flask(__name__)
 
-# Load data from ragweed.xlsx
+# Load and preprocess the Excel data
 df = pd.read_excel("ragweed.xlsx")
 
-# Preprocess the data to extract features and labels from the first 900 rows
+# Preprocess the data to extract features and labels
 data = []
 
-for i in range(900):  # Extract data for the first 900 rows
+# Collect the data from each pattern (ignore November)
+for i in range(901):  # Adjust the number of rows accordingly
     temp_data = df.iloc[i * 5:(i + 1) * 5].copy()
     
-    # Convert months to numerical values
+    # Convert month to numerical values and filter out November
     month_map = {'july': 7, 'august': 8, 'september': 9, 'october': 10}
-    temp_data['month'] = temp_data['month'].map(month_map)
-    temp_data = temp_data[temp_data['month'].notna()]  # Exclude rows with invalid months (like November)
+    temp_data['month'] = temp_data['month'].str.lower().map(month_map)
+    temp_data = temp_data[temp_data['month'].notna()]  # Exclude November rows
     
     data.append(temp_data)
 
 # Stack the data into a single DataFrame
 data_df = pd.concat(data).reset_index(drop=True)
 
-# Extract features and labels
+# Extract features (month, temp, humidity, clouds, rain) and labels (start and end shiftings)
 X = data_df[['month', 'temp (°C)', 'humidity (%)', 'clouds (%)', 'rain (mm)']].values
 y = data_df[['start shifting (days)', 'end shifting (days)']].values
 
@@ -42,38 +41,42 @@ start_shift_labels = y_train[X_train[:, 0] <= 8, 0]
 end_shift_train = X_train[X_train[:, 0] <= 10]  # Use July to October
 end_shift_labels = y_train[X_train[:, 0] <= 10, 1]
 
-# Train models
+# Train two Decision Tree Regressors
 start_shift_model = DecisionTreeRegressor(random_state=42)
 end_shift_model = DecisionTreeRegressor(random_state=42)
 
-start_shift_model.fit(start_shift_train[:, 1:], start_shift_labels)  # Exclude the month column
-end_shift_model.fit(end_shift_train[:, 1:], end_shift_labels)
+start_shift_model.fit(start_shift_train[:, 1:], start_shift_labels)  # Use features excluding the month
+end_shift_model.fit(end_shift_train[:, 1:], end_shift_labels)  # Use features excluding the month
 
-# Prediction function
+# Function to predict shiftings based on given weather data
 def predict_shiftings(weather_data):
     """
     Predict start and end shiftings based on the given weather data for the months July to October.
     :param weather_data: List of tuples [(month, temp, humidity, clouds, rain), ...]
     :return: Tuple (predicted_start_shift, predicted_end_shift)
     """
-    month_map = {'july': 7, 'august': 8, 'september': 9, 'october': 10}
     start_shift_input = []
     end_shift_input = []
 
-    # Ensure the weather_data is ordered chronologically by month
-    weather_data.sort(key=lambda x: x[0])
-
-    for month, temp, humidity, clouds, rain in weather_data:
-        month_num = month_map.get(month)
-        if month_num is None:
-            raise ValueError(f"Invalid month: {month}")
+    for entry in weather_data:
+        # If months are integers, use them directly; otherwise, map strings to integers
+        if isinstance(entry[0], str):
+            month_map = {'july': 7, 'august': 8, 'september': 9, 'october': 10}
+            month = month_map.get(entry[0].lower())
+        else:
+            month = entry[0]
+        
+        if month is None:
+            raise ValueError(f"Invalid month: {entry[0]}")
+        
+        temp, humidity, clouds, rain = entry[1:]
         
         # For start shifting, only consider July and August
-        if month_num <= 8:
+        if month <= 8:
             start_shift_input.append([temp, humidity, clouds, rain])
         
         # For end shifting, use the last available month
-        if month_num <= 10:
+        if month <= 10:
             end_shift_input = [[temp, humidity, clouds, rain]]  # Update to the most recent valid month
     
     # Predict start shifting if data for July or August is provided
@@ -88,21 +91,22 @@ def predict_shiftings(weather_data):
     else:
         end_shift_pred = 0  # No valid data for end shifting
     
-    return start_shift_pred, end_shift_pred
+    return {"start_shift": start_shift_pred, "end_shift": end_shift_pred}
 
-# Flask API routes
-@app.route('/')
+@app.route("/")
 def home():
     return "Welcome to the Allergy Prediction API! Use /predict to get predictions."
 
-@app.route('/predict', methods=['POST'])
+@app.route("/predict", methods=["POST"])
 def predict():
     try:
-        weather_data = request.json['weather_data']
+        weather_data = request.json.get("weather_data", [])
+        if not weather_data:
+            raise ValueError("No weather data provided.")
         result = predict_shiftings(weather_data)
-        return jsonify({"start_shift": result[0], "end_shift": result[1]})
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
