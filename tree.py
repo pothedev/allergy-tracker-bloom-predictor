@@ -61,10 +61,10 @@ def predict_shiftings(weather_data):
     end_shift_input = []
 
     # Ensure the weather_data is ordered chronologically by month
-    weather_data.sort(key=lambda x: month_map[x[0].lower()])
+    weather_data.sort(key=lambda x: x[0])
 
     for month, temp, humidity, clouds, rain in weather_data:
-        month_num = month_map.get(month.lower())
+        month_num = month_map.get(month)
         if month_num is None:
             raise ValueError(f"Invalid month: {month}")
         
